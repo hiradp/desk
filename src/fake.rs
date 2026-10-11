@@ -22,6 +22,8 @@ pub struct State {
     next_id: u32,
     pub current: Option<String>,
     pub sessions: Vec<FakeSession>,
+    /// How many times the sessions were listed.
+    pub listings: u32,
     /// Tab labels in the order they were focused.
     pub focused: Vec<String>,
     /// Session labels in the order they were shown.
@@ -152,10 +154,11 @@ impl Backend for Fake {
     }
 
     fn sessions(&self) -> Result<Vec<SessionRef>> {
-        let state = self.state.borrow();
+        let mut state = self.state.borrow_mut();
         if state.down {
             return Err(AppError::BackendUnavailable("fake is down".into()));
         }
+        state.listings += 1;
         Ok(state
             .sessions
             .iter()

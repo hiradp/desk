@@ -205,6 +205,13 @@ struct Attached {
     tab: AttachedTab,
 }
 
+impl Attached {
+    /// Whether attaching it opened or renamed anything.
+    fn changed(&self) -> bool {
+        self.status != Status::Reused || self.tab.status != Status::Reused
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct AttachedTab {
     label: String,
@@ -232,10 +239,19 @@ pub fn attach(config: &Config, backend: &dyn Backend, plan: &Plan) -> Result<Rep
         argv: argv.as_deref(),
     };
 
-    let root = attach.one(&plan.root, Placement::Beside(plan.parent.as_ref()))?;
+    // Listing costs a backend call per session, so it is repeated only after
+    // a workspace changed what is open.
+    let mut listed = attach.list()?;
+    let root = attach.one(&listed, &plan.root, Placement::Beside(plan.parent.as_ref()))?;
+    let mut stale = root.changed();
     let mut workspaces = Vec::with_capacity(1 + plan.descendants.len());
     for workspace in &plan.descendants {
-        workspaces.push(attach.one(workspace, Placement::In(&root.session_id))?);
+        if stale {
+            listed = attach.list()?;
+        }
+        let attached = attach.one(&listed, workspace, Placement::In(&root.session_id))?;
+        stale = attached.changed();
+        workspaces.push(attached);
     }
 
     let mut warnings = Vec::new();
@@ -287,9 +303,13 @@ struct Attach<'a> {
 }
 
 impl Attach<'_> {
-    fn one(&self, workspace: &Workspace, placement: Placement<'_>) -> Result<Attached> {
-        let listed = self.list()?;
-        let mut open = find(&listed, workspace);
+    fn one(
+        &self,
+        listed: &[Listed],
+        workspace: &Workspace,
+        placement: Placement<'_>,
+    ) -> Result<Attached> {
+        let mut open = find(listed, workspace);
         if open.len() > 1 {
             let candidates = join_ids(open.iter().map(Open::id));
             let mut rooted = Vec::new();
@@ -362,8 +382,7 @@ impl Attach<'_> {
         }
     }
 
-    /// Every session with its tabs, listed afresh for each workspace since
-    /// the one before may have changed them.
+    /// Every session with its tabs.
     fn list(&self) -> Result<Vec<Listed>> {
         self.backend
             .sessions()?
@@ -807,6 +826,7 @@ mod tests {
             let forest = Forest::new();
             let plan = forest.plan(None, &[("slots", Some("🚦")), ("tests", None)]);
             let first = run(&fake, &plan);
+            let listed = fake.state.borrow().listings;
 
             let second = run(&fake, &plan);
 
@@ -817,6 +837,8 @@ mod tests {
                     ["tests", "reused", "tests", "reused"]
                 ]
             );
+            // Nothing changed, so one look at what is open serves every workspace.
+            assert_eq!(fake.state.borrow().listings, listed + 1);
             for index in 0..2 {
                 let (first, second) = (&first["workspaces"][index], &second["workspaces"][index]);
                 assert_eq!(first["session_id"], second["session_id"]);
