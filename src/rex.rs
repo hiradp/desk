@@ -8,12 +8,17 @@
 //!   session. Only the app's `session.select` action does.
 //! - A terminal started without a command runs the login shell. A command
 //!   gets the login shell's environment but is not parsed as shell code.
+//! - Nothing can be stored on a session or window, so desk's keys are
+//!   dropped and never reported.
+//! - A window's panes are the blocks in its layers. A terminal block answers
+//!   `process` with its foreground process, which may report a cwd.
 //! - Exit status 3 means the target was not found or is ambiguous, and 4
 //!   means the server is unreachable.
 //!
 //! CLI reference: <https://www.superlogical.com/rex/docs/automate/cli>
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Deserialize;
@@ -85,6 +90,27 @@ struct WindowList {
 struct WindowEntry {
     window_id: String,
     label: String,
+    layers: Option<Vec<LayerEntry>>,
+}
+
+#[derive(Deserialize)]
+struct LayerEntry {
+    blocks: Option<Vec<BlockEntry>>,
+}
+
+#[derive(Deserialize)]
+struct BlockEntry {
+    block_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProcessResult {
+    foreground: Option<ProcessEntry>,
+}
+
+#[derive(Deserialize)]
+struct ProcessEntry {
+    cwd: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +157,20 @@ impl<R: Runner> Rex<R> {
             source,
         })
     }
+
+    fn windows(&self, session_id: &str) -> Result<Vec<WindowEntry>> {
+        let list: WindowList = self.request(
+            "could not list Rex windows",
+            vec![
+                "window".into(),
+                "ls".into(),
+                "--session".into(),
+                session_id.into(),
+                "--json".into(),
+            ],
+        )?;
+        Ok(list.windows.unwrap_or_default())
+    }
 }
 
 /// The arguments shared by `rex new` and `rex window new`.
@@ -160,11 +200,17 @@ impl<R: Runner> Backend for Rex<R> {
             .map(|session| SessionRef {
                 id: session.session_id,
                 label: session.label,
+                key: None,
             })
             .collect())
     }
 
-    fn create_session(&self, label: &str, tab: NewTab<'_>) -> Result<CreatedSession> {
+    fn create_session(
+        &self,
+        label: &str,
+        _key: Option<&str>,
+        tab: NewTab<'_>,
+    ) -> Result<CreatedSession> {
         let context = "could not create a Rex session";
         let mut arguments = vec![
             "new".into(),
@@ -196,24 +242,31 @@ impl<R: Runner> Backend for Rex<R> {
         .map(drop)
     }
 
-    fn tabs(&self, session_id: &str) -> Result<Vec<TabRef>> {
-        let list: WindowList = self.request(
-            "could not list Rex windows",
+    fn rename_session(&self, session_id: &str, label: &str) -> Result<()> {
+        self.run(
+            "could not rename a Rex session",
             vec![
-                "window".into(),
-                "ls".into(),
-                "--session".into(),
+                "session".into(),
+                "rename".into(),
                 session_id.into(),
-                "--json".into(),
+                label.into(),
             ],
-        )?;
-        Ok(list
-            .windows
-            .unwrap_or_default()
+        )
+        .map(drop)
+    }
+
+    fn set_session_key(&self, _session_id: &str, _key: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn tabs(&self, session_id: &str) -> Result<Vec<TabRef>> {
+        Ok(self
+            .windows(session_id)?
             .into_iter()
             .map(|window| TabRef {
                 id: window.window_id,
                 label: window.label,
+                key: None,
             })
             .collect())
     }
@@ -232,6 +285,58 @@ impl<R: Runner> Backend for Rex<R> {
         Ok(created.window_id)
     }
 
+    fn rename_tab(&self, session_id: &str, tab_id: &str, label: &str) -> Result<()> {
+        self.run(
+            "could not rename a Rex window",
+            vec![
+                "window".into(),
+                "rename".into(),
+                "--session".into(),
+                session_id.into(),
+                tab_id.into(),
+                label.into(),
+            ],
+        )
+        .map(drop)
+    }
+
+    fn set_tab_key(&self, _session_id: &str, _tab_id: &str, _key: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn tab_cwds(&self, session_id: &str, tab_id: &str) -> Result<Vec<PathBuf>> {
+        let window = self
+            .windows(session_id)?
+            .into_iter()
+            .find(|window| window.window_id == tab_id);
+        let blocks = window
+            .and_then(|window| window.layers)
+            .into_iter()
+            .flatten()
+            .flat_map(|layer| layer.blocks.unwrap_or_default())
+            .filter_map(|block| block.block_id);
+        // A block that is not a terminal has no process to ask about.
+        Ok(blocks
+            .filter_map(|block_id| {
+                let process: ProcessResult = self
+                    .request(
+                        "could not inspect a Rex block",
+                        vec![
+                            "block".into(),
+                            "call".into(),
+                            "--session".into(),
+                            session_id.into(),
+                            "--block".into(),
+                            block_id.into(),
+                            "process".into(),
+                        ],
+                    )
+                    .ok()?;
+                process.foreground?.cwd
+            })
+            .collect())
+    }
+
     fn focus_tab(&self, session_id: &str, tab_id: &str) -> Result<()> {
         self.run(
             "could not focus a Rex window",
@@ -242,10 +347,13 @@ impl<R: Runner> Backend for Rex<R> {
                 session_id.into(),
                 tab_id.into(),
             ],
-        )?;
-        // Only the app can show a session, and none may be connected. The tab
-        // is open and active either way.
-        if let Err(error) = self.run(
+        )
+        .map(drop)
+    }
+
+    fn show_session(&self, session_id: &str, tab_id: &str) -> Result<()> {
+        // Only the app can show a session, and none may be connected.
+        self.run(
             "could not show the session in the Rex app",
             vec![
                 "do".into(),
@@ -253,10 +361,8 @@ impl<R: Runner> Backend for Rex<R> {
                 format!("session_id={session_id}").into(),
                 format!("window_id={tab_id}").into(),
             ],
-        ) {
-            eprintln!("warning: {error}");
-        }
-        Ok(())
+        )
+        .map(drop)
     }
 }
 
@@ -311,6 +417,7 @@ mod tests {
             label: "📝 notes",
             dir: Path::new("/src/app"),
             argv,
+            key: None,
         }
     }
 
@@ -339,7 +446,8 @@ mod tests {
             sessions,
             [SessionRef {
                 id: "session:1".into(),
-                label: "🏠 main".into()
+                label: "🏠 main".into(),
+                key: None
             }]
         );
         let tabs: Vec<_> = tabs
@@ -365,7 +473,9 @@ mod tests {
         )]);
         let argv = ["fish", "-C", "agent 'a b'"].map(String::from);
 
-        let created = rex.create_session("🏠 main", tab(Some(&argv))).unwrap();
+        let created = rex
+            .create_session("🏠 main", None, tab(Some(&argv)))
+            .unwrap();
 
         assert_eq!(created.session_id, "session:9");
         assert_eq!(created.tab_id, "window:7");
@@ -396,16 +506,75 @@ mod tests {
     }
 
     #[test]
-    fn focus_shows_the_session_but_survives_a_missing_app() {
+    fn focusing_and_showing_are_separate_and_a_missing_app_fails_only_the_show() {
         let rex = rex(&[(0, ""), (1, "no client offers session.select")]);
 
         rex.focus_tab("session:9", "window:8").unwrap();
+        let shown = rex.show_session("session:9", "window:8").unwrap_err();
 
+        assert_eq!(
+            shown.to_string(),
+            "could not show the session in the Rex app: no client offers session.select"
+        );
         assert_eq!(
             calls(&rex),
             [
                 "--autostart=false window focus --session session:9 window:8",
                 "--autostart=false do session.select session_id=session:9 window_id=window:8"
+            ]
+        );
+    }
+
+    #[test]
+    fn renames_by_id_and_stores_no_keys() {
+        let rex = rex(&[(0, ""), (0, "")]);
+
+        rex.rename_session("session:9", "🌲 q4").unwrap();
+        rex.rename_tab("session:9", "window:8", "🌲 main").unwrap();
+        let stored = [
+            rex.set_session_key("session:9", "/src/app").unwrap(),
+            rex.set_tab_key("session:9", "window:8", "/src/app")
+                .unwrap(),
+        ];
+
+        assert_eq!(stored, [false, false]);
+        assert_eq!(
+            calls(&rex),
+            [
+                "--autostart=false session rename session:9 🌲 q4",
+                "--autostart=false window rename --session session:9 window:8 🌲 main"
+            ]
+        );
+    }
+
+    // The shapes below follow git-forest's Rex client; they were not captured
+    // from a running Rex here.
+    #[test]
+    fn tab_cwds_asks_each_block_of_the_tab_and_skips_those_without_one() {
+        let rex = rex(&[
+            (
+                0,
+                r#"{"windows":[
+                    {"window_id":"window:1","label":"a",
+                     "layers":[{"blocks":[{"block_id":"block:9"}]}]},
+                    {"window_id":"window:2","label":"b",
+                     "layers":[{"blocks":[{"block_id":"block:3"},{"block_id":"block:4"}]},
+                               {"blocks":[{"block_id":"block:5"}]}]}]}"#,
+            ),
+            (0, r#"{"foreground":{"cwd":"/src/app"}}"#),
+            (1, "Error: block has no process"),
+            (0, r#"{"foreground":null}"#),
+        ]);
+
+        let cwds = rex.tab_cwds("session:1", "window:2").unwrap();
+
+        assert_eq!(cwds, [PathBuf::from("/src/app")]);
+        assert_eq!(
+            calls(&rex)[1..],
+            [
+                "--autostart=false block call --session session:1 --block block:3 process",
+                "--autostart=false block call --session session:1 --block block:4 process",
+                "--autostart=false block call --session session:1 --block block:5 process"
             ]
         );
     }

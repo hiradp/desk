@@ -27,6 +27,7 @@ desk                          build every startup target; safe to rerun
 desk open <target> [prompt…]  open the target, or focus it if already open
 desk ls                       list sessions, targets and open tabs
 desk stop [session]           kill the sessions desk manages, or just one
+desk attach --plan <file|->   open or focus the workspaces a plan describes
 desk completions <shell>      print shell completion setup
 ```
 
@@ -101,11 +102,63 @@ recipe for a tab.
 - Target names are unique across all sessions, and session labels are unique.
 - desk finds its tabs by label: `<icon> <name>`, plus a number for `multi`.
 
+## Attach
+
+`desk attach` places workspaces that another tool describes, such as a
+[git-forest](https://github.com/hiradp/git-forest) workspace and its children.
+It reads a JSON plan from a file, or from standard input with `--plan -`:
+
+```json
+{
+  "version": 1,
+  "parent": {"name": "q4-storage", "symbol": "🌲", "dir": "/src/q4-storage"},
+  "workspaces": [
+    {"name": "logical-slots", "symbol": "🚦", "dir": "/src/logical-slots"},
+    {"name": "slot-tests", "symbol": null, "dir": "/src/slot-tests"}
+  ]
+}
+```
+
+The first workspace is the one being attached and the rest are its
+descendants, parents before children. `parent` is the first one's nearest
+ancestor, or `null`. Every `dir` is absolute and canonical. Other fields are
+ignored.
+
+- A workspace that is not open yet becomes a session labelled
+  `<symbol> <name>` whose first tab is `<symbol> main`. If desk runs in a
+  session where `parent` is open, it becomes a tab there instead, labelled
+  `<symbol> <name>`.
+- Descendants open as tabs in the session holding the first workspace.
+- A workspace that is already open is reused, and stale labels are renamed.
+  It is found by a label that is its name, with or without a symbol. When
+  several match, the one with a pane working inside `dir` wins; otherwise
+  desk fails and lists them.
+- Tabs run `shell` with no command. The first workspace's tab ends up focused.
+- These sessions are not in the config, so `desk stop` leaves them alone.
+
+It prints one JSON report and nothing else on standard output:
+
+```json
+{
+  "backend": "rex",
+  "workspaces": [
+    {"name": "logical-slots", "session_id": "…", "status": "created",
+     "tab": {"label": "🚦 main", "dir": "/src/logical-slots", "id": "…", "status": "created"}}
+  ],
+  "warnings": []
+}
+```
+
+There is one entry per workspace, in the plan's order. A `status` is
+`created`, `reused`, or `reconciled` when it was open but had to be relabelled.
+An app that could not be switched to the session is a warning; anything else
+that goes wrong is an error on standard error and a non-zero exit.
+
 ## Not yet
 
 - Backends other than Rex.
 - Prompt quoting for shells other than fish.
-- Pane splits, tab renaming, JSON output.
+- Pane splits, JSON output from `desk ls`.
 
 ## License
 

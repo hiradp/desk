@@ -6,12 +6,14 @@ sync with behaviour.
 
 ## Structure
 
+- `src/attach.rs`: `desk attach`: the plan, its placement rules and report.
 - `src/backend.rs`: the multiplexer trait.
 - `src/cli.rs`: command-line syntax only.
 - `src/commands.rs`: what each command does, against the trait.
 - `src/completion.rs`: shell completion of targets and sessions.
 - `src/config.rs`: config loading, includes and validation.
 - `src/error.rs`: error type and exit codes.
+- `src/fake.rs`: the in-memory backend the command tests run against.
 - `src/rex.rs`: the Rex backend, driving the `rex` CLI.
 
 ## Quality gates

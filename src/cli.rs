@@ -1,4 +1,6 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand, ValueEnum, ValueHint};
 use clap_complete::engine::ArgValueCompleter;
 
 use crate::completion;
@@ -23,6 +25,9 @@ pub enum Command {
     /// Kill the sessions desk manages, or just one
     Stop(StopArgs),
 
+    /// Open or focus the workspaces a plan describes, and report them as JSON
+    Attach(AttachArgs),
+
     /// Print shell completion setup
     Completions(CompletionsArgs),
 }
@@ -43,6 +48,13 @@ pub struct StopArgs {
     /// Session key to kill; all managed sessions when omitted
     #[arg(add = ArgValueCompleter::new(completion::sessions))]
     pub session: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AttachArgs {
+    /// JSON plan to read; `-` reads standard input
+    #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
+    pub plan: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -79,6 +91,16 @@ mod tests {
         };
         assert_eq!(args.target, "notes");
         assert_eq!(args.prompt, ["why", "--is", "-it", "slow"]);
+    }
+
+    #[test]
+    fn attach_reads_a_plan_from_a_file_or_standard_input() {
+        for plan in ["plan.json", "-"] {
+            let Some(Command::Attach(args)) = parse(&["attach", "--plan", plan]).command else {
+                panic!("expected Attach");
+            };
+            assert_eq!(args.plan, PathBuf::from(plan));
+        }
     }
 
     #[test]

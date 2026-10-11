@@ -28,6 +28,14 @@ pub enum BackendKind {
     Rex,
 }
 
+impl BackendKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rex => "rex",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Session {
     pub key: String,

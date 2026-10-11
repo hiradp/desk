@@ -39,6 +39,25 @@ pub enum AppError {
     #[error("target `{0}` is already open; a prompt can only start a new tab")]
     TabAlreadyOpen(String),
 
+    #[error("could not read the plan from {origin}: {source}")]
+    ReadPlan {
+        origin: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("could not parse the plan: {0}")]
+    ParsePlan(#[source] serde_json::Error),
+
+    #[error("invalid plan: {0}")]
+    InvalidPlan(String),
+
+    #[error("multiple sessions or tabs match workspace {name:?}: {candidates}")]
+    AmbiguousWorkspace { name: String, candidates: String },
+
+    #[error("multiple tabs in session {session} match the workspace's main tab: {candidates}")]
+    AmbiguousMainTab { session: String, candidates: String },
+
     #[error("directory {} does not exist", .0.display())]
     MissingDirectory(PathBuf),
 
@@ -71,8 +90,13 @@ impl AppError {
             | Self::InvalidConfig { .. }
             | Self::UnknownTarget(_)
             | Self::UnknownSession(_)
-            | Self::PromptNotAccepted { .. } => 2,
+            | Self::PromptNotAccepted { .. }
+            | Self::ReadPlan { .. }
+            | Self::ParsePlan(_)
+            | Self::InvalidPlan(_) => 2,
             Self::TabAlreadyOpen(_)
+            | Self::AmbiguousWorkspace { .. }
+            | Self::AmbiguousMainTab { .. }
             | Self::MissingDirectory(_)
             | Self::BackendUnavailable(_)
             | Self::StartRex(_)

@@ -24,6 +24,7 @@ pub fn build(config: &Config, backend: &dyn Backend) -> Result<()> {
             label: &label,
             dir: &target.dir,
             argv: argv.as_deref(),
+            key: None,
         };
         let session_label = config.session_label(target);
         match sessions
@@ -40,10 +41,11 @@ pub fn build(config: &Config, backend: &dyn Backend) -> Result<()> {
                 }
             }
             None => {
-                let created = backend.create_session(session_label, tab)?;
+                let created = backend.create_session(session_label, None, tab)?;
                 sessions.push(SessionRef {
                     id: created.session_id,
                     label: session_label.to_owned(),
+                    key: None,
                 });
             }
         }
@@ -95,7 +97,7 @@ pub fn open(config: &Config, backend: &dyn Backend, name: &str, prompt: &[String
         if prompt.is_some() {
             return Err(AppError::TabAlreadyOpen(name.to_owned()));
         }
-        return backend.focus_tab(&session.id, &tab.id);
+        return focus(backend, &session.id, &tab.id);
     } else {
         base
     };
@@ -106,6 +108,7 @@ pub fn open(config: &Config, backend: &dyn Backend, name: &str, prompt: &[String
         label: &label,
         dir: &target.dir,
         argv: argv.as_deref(),
+        key: None,
     };
     let (session_id, tab_id) = match session {
         Some(session) => {
@@ -113,11 +116,11 @@ pub fn open(config: &Config, backend: &dyn Backend, name: &str, prompt: &[String
             (session.id, tab_id)
         }
         None => {
-            let created = backend.create_session(session_label, tab)?;
+            let created = backend.create_session(session_label, None, tab)?;
             (created.session_id, created.tab_id)
         }
     };
-    backend.focus_tab(&session_id, &tab_id)
+    focus(backend, &session_id, &tab_id)
 }
 
 pub fn ls(config: &Config, backend: &dyn Backend, out: &mut dyn Write) -> Result<()> {
@@ -201,7 +204,17 @@ fn running_sessions(backend: &dyn Backend) -> Result<Vec<SessionRef>> {
     }
 }
 
-fn require_dir(dir: &Path) -> Result<()> {
+/// Makes the tab active and shows its session to the user.
+fn focus(backend: &dyn Backend, session_id: &str, tab_id: &str) -> Result<()> {
+    backend.focus_tab(session_id, tab_id)?;
+    // The tab is open and active either way.
+    if let Err(error) = backend.show_session(session_id, tab_id) {
+        eprintln!("warning: {error}");
+    }
+    Ok(())
+}
+
+pub fn require_dir(dir: &Path) -> Result<()> {
     if dir.is_dir() {
         Ok(())
     } else {
@@ -248,19 +261,24 @@ fn open_tabs<'a>(target: &Target, tabs: &'a [TabRef]) -> Vec<&'a str> {
 /// target with no command gets the bare shell, or the backend's default when
 /// no `shell` is configured.
 fn argv(config: &Config, target: &Target, prompt: Option<&str>) -> Option<Vec<String>> {
-    let shell = config.shell.as_ref()?;
     let prompt = prompt.map(fish_quote).unwrap_or_default();
     let command = target
         .command
         .as_deref()
         .unwrap_or_default()
         .replace(PROMPT_PLACEHOLDER, &prompt);
+    shell_argv(config, &command)
+}
+
+/// The configured `shell` running `command`, which may be empty.
+pub fn shell_argv(config: &Config, command: &str) -> Option<Vec<String>> {
+    let shell = config.shell.as_ref()?;
     Some(
         shell
             .iter()
             .map(|argument| {
                 if argument == COMMAND_PLACEHOLDER {
-                    command.clone()
+                    command.to_owned()
                 } else {
                     argument.clone()
                 }
@@ -277,205 +295,9 @@ fn fish_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::path::PathBuf;
-
     use super::*;
-    use crate::backend::CreatedSession;
     use crate::config::{BackendKind, Session};
-
-    #[derive(Default)]
-    struct Fake {
-        state: RefCell<State>,
-    }
-
-    #[derive(Default)]
-    struct State {
-        down: bool,
-        next_id: u32,
-        current: Option<String>,
-        sessions: Vec<FakeSession>,
-        /// Tab labels in the order they were focused.
-        focused: Vec<String>,
-        /// Session labels in the order they were killed.
-        killed: Vec<String>,
-    }
-
-    struct FakeSession {
-        id: String,
-        label: String,
-        tabs: Vec<FakeTab>,
-    }
-
-    struct FakeTab {
-        id: String,
-        label: String,
-        dir: PathBuf,
-        argv: Option<Vec<String>>,
-    }
-
-    impl State {
-        fn id(&mut self) -> String {
-            self.next_id += 1;
-            format!("id-{}", self.next_id)
-        }
-
-        fn tab(&mut self, tab: NewTab<'_>) -> FakeTab {
-            FakeTab {
-                id: self.id(),
-                label: tab.label.to_owned(),
-                dir: tab.dir.to_owned(),
-                argv: tab.argv.map(<[String]>::to_vec),
-            }
-        }
-    }
-
-    impl Fake {
-        /// Adds a session as if it had been created outside desk.
-        fn seed(&self, label: &str, tabs: &[&str]) -> String {
-            let mut state = self.state.borrow_mut();
-            let tabs = tabs
-                .iter()
-                .map(|label| {
-                    state.tab(NewTab {
-                        label,
-                        dir: Path::new("/"),
-                        argv: None,
-                    })
-                })
-                .collect();
-            let id = state.id();
-            state.sessions.push(FakeSession {
-                id: id.clone(),
-                label: label.to_owned(),
-                tabs,
-            });
-            id
-        }
-
-        fn layout(&self) -> Vec<(String, Vec<String>)> {
-            let state = self.state.borrow();
-            state
-                .sessions
-                .iter()
-                .map(|session| {
-                    let tabs = session.tabs.iter().map(|tab| tab.label.clone()).collect();
-                    (session.label.clone(), tabs)
-                })
-                .collect()
-        }
-
-        fn argv(&self, label: &str) -> Option<Vec<String>> {
-            let state = self.state.borrow();
-            let tab = state
-                .sessions
-                .iter()
-                .flat_map(|session| &session.tabs)
-                .find(|tab| tab.label == label)
-                .unwrap();
-            tab.argv.clone()
-        }
-
-        fn focused(&self) -> Vec<String> {
-            self.state.borrow().focused.clone()
-        }
-    }
-
-    impl Backend for Fake {
-        fn current_session(&self) -> Option<String> {
-            self.state.borrow().current.clone()
-        }
-
-        fn sessions(&self) -> Result<Vec<SessionRef>> {
-            let state = self.state.borrow();
-            if state.down {
-                return Err(AppError::BackendUnavailable("fake is down".into()));
-            }
-            Ok(state
-                .sessions
-                .iter()
-                .map(|session| SessionRef {
-                    id: session.id.clone(),
-                    label: session.label.clone(),
-                })
-                .collect())
-        }
-
-        fn create_session(&self, label: &str, tab: NewTab<'_>) -> Result<CreatedSession> {
-            let mut state = self.state.borrow_mut();
-            let tab = state.tab(tab);
-            let created = CreatedSession {
-                session_id: state.id(),
-                tab_id: tab.id.clone(),
-            };
-            state.sessions.push(FakeSession {
-                id: created.session_id.clone(),
-                label: label.to_owned(),
-                tabs: vec![tab],
-            });
-            Ok(created)
-        }
-
-        fn kill_session(&self, session_id: &str) -> Result<()> {
-            let mut state = self.state.borrow_mut();
-            let index = state
-                .sessions
-                .iter()
-                .position(|session| session.id == session_id)
-                .unwrap();
-            let label = state.sessions.remove(index).label;
-            state.killed.push(label);
-            Ok(())
-        }
-
-        fn tabs(&self, session_id: &str) -> Result<Vec<TabRef>> {
-            let state = self.state.borrow();
-            let session = state
-                .sessions
-                .iter()
-                .find(|session| session.id == session_id)
-                .unwrap();
-            Ok(session
-                .tabs
-                .iter()
-                .map(|tab| TabRef {
-                    id: tab.id.clone(),
-                    label: tab.label.clone(),
-                })
-                .collect())
-        }
-
-        fn open_tab(&self, session_id: &str, tab: NewTab<'_>) -> Result<String> {
-            let mut state = self.state.borrow_mut();
-            let tab = state.tab(tab);
-            let id = tab.id.clone();
-            state
-                .sessions
-                .iter_mut()
-                .find(|session| session.id == session_id)
-                .unwrap()
-                .tabs
-                .push(tab);
-            Ok(id)
-        }
-
-        fn focus_tab(&self, session_id: &str, tab_id: &str) -> Result<()> {
-            let mut state = self.state.borrow_mut();
-            let label = state
-                .sessions
-                .iter()
-                .find(|session| session.id == session_id)
-                .unwrap()
-                .tabs
-                .iter()
-                .find(|tab| tab.id == tab_id)
-                .unwrap()
-                .label
-                .clone();
-            state.focused.push(label);
-            Ok(())
-        }
-    }
+    use crate::fake::Fake;
 
     const MAIN: &str = "🏠 main";
     const WORK: &str = "🔎 work";
