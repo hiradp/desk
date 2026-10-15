@@ -80,10 +80,11 @@ recipe for a tab.
 
 | Target field | Meaning                                                     |
 |--------------|-------------------------------------------------------------|
-| `icon`       | Tab label prefix. Required.                                  |
+| `icon`       | Tab label prefix. Required unless `label = false`.           |
 | `dir`        | Working directory, absolute or starting with `~/`. Required. |
 | `command`    | Shell code to run in the tab. May contain `{prompt}`.        |
 | `mode`       | `startup`, `demand` (the default) or `multi`.                |
+| `label`      | `false` leaves a `multi` target's tabs unlabelled.           |
 
 | Mode      | Tabs | Opened by                                   |
 |-----------|------|---------------------------------------------|
@@ -101,6 +102,7 @@ recipe for a tab.
   does not exist is skipped, so one config works across machines.
 - Target names are unique across all sessions, and session labels are unique.
 - desk finds its tabs by label: `<icon> <name>`, plus a number for `multi`.
+  Unlabelled tabs are not found again, so `desk ls` does not list them.
 
 ## Attach
 

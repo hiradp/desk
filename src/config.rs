@@ -46,7 +46,8 @@ pub struct Session {
 pub struct Target {
     pub name: String,
     pub session: String,
-    pub icon: String,
+    /// `None` when the target's tabs go unlabelled.
+    pub icon: Option<String>,
     pub dir: PathBuf,
     pub command: Option<String>,
     pub mode: Mode,
@@ -230,6 +231,7 @@ impl<'a> Loader<'a> {
         let mut dir = None;
         let mut command = None;
         let mut mode = None;
+        let mut labelled = true;
         for (field, value) in table {
             let key = format!("{session}.{name}.{field}");
             match field.as_str() {
@@ -237,13 +239,33 @@ impl<'a> Loader<'a> {
                 "dir" => dir = Some(string(path, &key, value)?),
                 "command" => command = Some(string(path, &key, value)?),
                 "mode" => mode = Some(parse_mode(path, &key, value)?),
+                "label" => labelled = boolean(path, &key, value)?,
                 _ => return Err(invalid(path, format!("unknown key `{key}`"))),
             }
         }
 
         let missing =
             |field: &str| invalid(path, format!("`{session}.{name}` is missing `{field}`"));
-        let icon = icon.ok_or_else(|| missing("icon"))?;
+        let mode = mode.unwrap_or(Mode::Demand);
+        let icon = match (labelled, icon) {
+            (true, icon) => Some(icon.ok_or_else(|| missing("icon"))?),
+            // desk finds a single tab by its label, so only `multi` tabs can go without.
+            (false, _) if mode != Mode::Multi => {
+                return Err(invalid(
+                    path,
+                    format!(
+                        "`{session}.{name}` can only set `label = false` with `mode = \"multi\"`"
+                    ),
+                ));
+            }
+            (false, Some(_)) => {
+                return Err(invalid(
+                    path,
+                    format!("`{session}.{name}` cannot have an `icon` with `label = false`"),
+                ));
+            }
+            (false, None) => None,
+        };
         let dir = dir.ok_or_else(|| missing("dir"))?;
         let expanded = expand_tilde(&dir, self.home);
         if !expanded.is_absolute() {
@@ -260,7 +282,7 @@ impl<'a> Loader<'a> {
             icon,
             dir: expanded,
             command,
-            mode: mode.unwrap_or(Mode::Demand),
+            mode,
         });
         Ok(())
     }
@@ -347,6 +369,13 @@ fn string(path: &Path, key: &str, value: Value) -> Result<String> {
     }
 }
 
+fn boolean(path: &Path, key: &str, value: Value) -> Result<bool> {
+    match value {
+        Value::Boolean(value) => Ok(value),
+        _ => Err(invalid(path, format!("`{key}` must be a boolean"))),
+    }
+}
+
 fn string_list(path: &Path, key: &str, value: Value) -> Result<Vec<String>> {
     let error = || invalid(path, format!("`{key}` must be a list of strings"));
     let Value::Array(values) = value else {
@@ -424,6 +453,11 @@ mod tests {
             icon = "📦"
             dir = "/src/app"
             command = "agent {prompt}"
+
+            [main.agent]
+            dir = "/src/app"
+            mode = "multi"
+            label = false
             "#,
         )])
         .unwrap();
@@ -450,7 +484,7 @@ mod tests {
                 Target {
                     name: "notes".into(),
                     session: "main".into(),
-                    icon: "📝".into(),
+                    icon: Some("📝".into()),
                     dir: "/home/u/notes".into(),
                     command: None,
                     mode: Mode::Startup,
@@ -458,10 +492,18 @@ mod tests {
                 Target {
                     name: "app".into(),
                     session: "main".into(),
-                    icon: "📦".into(),
+                    icon: Some("📦".into()),
                     dir: "/src/app".into(),
                     command: Some("agent {prompt}".into()),
                     mode: Mode::Demand,
+                },
+                Target {
+                    name: "agent".into(),
+                    session: "main".into(),
+                    icon: None,
+                    dir: "/src/app".into(),
+                    command: None,
+                    mode: Mode::Multi,
                 },
             ]
         );
@@ -612,6 +654,14 @@ mod tests {
             ),
             (target("dir = \"/d\""), "`main.notes` is missing `icon`"),
             (target("icon = \"i\""), "`main.notes` is missing `dir`"),
+            (
+                target("dir = \"/d\"\nlabel = false"),
+                "`main.notes` can only set `label = false` with `mode = \"multi\"`",
+            ),
+            (
+                target("icon = \"i\"\ndir = \"/d\"\nmode = \"multi\"\nlabel = false"),
+                "`main.notes` cannot have an `icon` with `label = false`",
+            ),
             (
                 target("icon = \"i\"\ndir = \"/d\"\nmode = \"always\""),
                 "`main.notes.mode` must be `startup`, `demand` or `multi`",

@@ -60,9 +60,13 @@ impl State {
     }
 
     fn tab(&mut self, tab: NewTab<'_>) -> FakeTab {
+        let id = self.id();
         FakeTab {
-            id: self.id(),
-            label: tab.label.to_owned(),
+            // Rex names an unlabelled window this way.
+            label: tab
+                .label
+                .map_or_else(|| format!("Window {id}"), str::to_owned),
+            id,
             key: self.key(tab.key),
             dir: tab.dir.to_owned(),
             cwds: vec![tab.dir.to_owned()],
@@ -94,7 +98,7 @@ impl Fake {
             .iter()
             .map(|label| {
                 state.tab(NewTab {
-                    label,
+                    label: Some(label),
                     dir: Path::new("/"),
                     argv: None,
                     key: None,

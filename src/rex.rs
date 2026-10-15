@@ -212,12 +212,10 @@ impl<R: Runner> Backend for Rex<R> {
         tab: NewTab<'_>,
     ) -> Result<CreatedSession> {
         let context = "could not create a Rex session";
-        let mut arguments = vec![
-            "new".into(),
-            label.into(),
-            "--window".into(),
-            tab.label.into(),
-        ];
+        let mut arguments = vec!["new".into(), label.into()];
+        if let Some(window) = tab.label {
+            arguments.extend(["--window".into(), window.into()]);
+        }
         arguments.extend(terminal(tab));
         let created: SessionCreated = self.request(context, arguments)?;
         let window = created
@@ -277,9 +275,9 @@ impl<R: Runner> Backend for Rex<R> {
             "new".into(),
             "--session".into(),
             session_id.into(),
-            tab.label.into(),
-            "--focus=false".into(),
         ];
+        arguments.extend(tab.label.map(OsString::from));
+        arguments.push("--focus=false".into());
         arguments.extend(terminal(tab));
         let created: WindowCreated = self.request("could not create a Rex window", arguments)?;
         Ok(created.window_id)
@@ -414,7 +412,7 @@ mod tests {
 
     fn tab<'a>(argv: Option<&'a [String]>) -> NewTab<'a> {
         NewTab {
-            label: "📝 notes",
+            label: Some("📝 notes"),
             dir: Path::new("/src/app"),
             argv,
             key: None,
@@ -500,6 +498,37 @@ mod tests {
             calls(&rex),
             [
                 "--autostart=false window new --session session:9 📝 notes --focus=false \
+              --cwd /src/app --json"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unlabelled_tab_leaves_the_label_to_rex() {
+        let rex = rex(&[
+            (
+                0,
+                r#"{"session_id":"session:9","initial_windows":[{"window_id":"window:7",
+                    "block_ids":["block:3"],"revision":1}]}"#,
+            ),
+            (
+                0,
+                r#"{"window_id":"window:8","block_ids":["block:4"],"revision":2}"#,
+            ),
+        ]);
+        let tab = NewTab {
+            label: None,
+            ..tab(None)
+        };
+
+        rex.create_session("🏠 main", None, tab).unwrap();
+        rex.open_tab("session:9", tab).unwrap();
+
+        assert_eq!(
+            calls(&rex),
+            [
+                "--autostart=false new 🏠 main --cwd /src/app --json",
+                "--autostart=false window new --session session:9 --focus=false \
               --cwd /src/app --json"
             ]
         );

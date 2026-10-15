@@ -18,10 +18,10 @@ pub fn build(config: &Config, backend: &dyn Backend) -> Result<()> {
 
     let mut sessions = backend.sessions()?;
     for target in startup {
-        let label = base_label(target);
+        let label = base_label(target).expect("a startup target has a label");
         let argv = argv(config, target, None);
         let tab = NewTab {
-            label: &label,
+            label: Some(&label),
             dir: &target.dir,
             argv: argv.as_deref(),
             key: None,
@@ -88,24 +88,28 @@ pub fn open(config: &Config, backend: &dyn Backend, name: &str, prompt: &[String
         None => Vec::new(),
     };
 
-    let base = base_label(target);
-    let label = if target.mode == Mode::Multi {
-        format!("{base} {}", next_number(&base, &tabs))
-    } else if let Some(session) = &session
-        && let Some(tab) = tabs.iter().find(|tab| tab.label == base)
-    {
-        if prompt.is_some() {
-            return Err(AppError::TabAlreadyOpen(name.to_owned()));
+    let label = match base_label(target) {
+        None => None,
+        Some(base) if target.mode == Mode::Multi => {
+            Some(format!("{base} {}", next_number(&base, &tabs)))
         }
-        return focus(backend, &session.id, &tab.id);
-    } else {
-        base
+        Some(base) => {
+            if let Some(session) = &session
+                && let Some(tab) = tabs.iter().find(|tab| tab.label == base)
+            {
+                if prompt.is_some() {
+                    return Err(AppError::TabAlreadyOpen(name.to_owned()));
+                }
+                return focus(backend, &session.id, &tab.id);
+            }
+            Some(base)
+        }
     };
 
     require_dir(&target.dir)?;
     let argv = argv(config, target, prompt.as_deref());
     let tab = NewTab {
-        label: &label,
+        label: label.as_deref(),
         dir: &target.dir,
         argv: argv.as_deref(),
         key: None,
@@ -222,8 +226,10 @@ pub fn require_dir(dir: &Path) -> Result<()> {
     }
 }
 
-fn base_label(target: &Target) -> String {
-    format!("{} {}", target.icon, target.name)
+/// `None` for a target whose tabs go unlabelled.
+fn base_label(target: &Target) -> Option<String> {
+    let icon = target.icon.as_ref()?;
+    Some(format!("{icon} {}", target.name))
 }
 
 /// The number in a multi target's tab label, if `label` is one of its tabs.
@@ -246,8 +252,11 @@ fn next_number(base: &str, tabs: &[TabRef]) -> u32 {
         .expect("a number is free")
 }
 
+/// Unlabelled tabs cannot be told apart from the rest, so they are not listed.
 fn open_tabs<'a>(target: &Target, tabs: &'a [TabRef]) -> Vec<&'a str> {
-    let base = base_label(target);
+    let Some(base) = base_label(target) else {
+        return Vec::new();
+    };
     tabs.iter()
         .map(|tab| tab.label.as_str())
         .filter(|label| match target.mode {
@@ -306,7 +315,7 @@ mod tests {
         Target {
             name: name.to_owned(),
             session: session.to_owned(),
-            icon: "•".to_owned(),
+            icon: Some("•".to_owned()),
             dir: dir.to_owned(),
             command: command.map(str::to_owned),
             mode,
@@ -443,6 +452,23 @@ mod tests {
         open(&config, &fake, "agent", &[]).unwrap();
 
         assert_eq!(fake.focused(), ["• agent 2", "• agent 4"]);
+    }
+
+    #[test]
+    fn open_adds_an_unlabelled_multi_tab_every_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config(dir.path());
+        config.targets[4].icon = None;
+        let fake = Fake::default();
+
+        open(&config, &fake, "agent", &[]).unwrap();
+        open(&config, &fake, "agent", &[]).unwrap();
+
+        assert_eq!(
+            fake.layout(),
+            layout(&[(WORK, &["Window id-1", "Window id-3"])])
+        );
+        assert_eq!(fake.focused(), ["Window id-1", "Window id-3"]);
     }
 
     #[test]

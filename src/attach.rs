@@ -365,7 +365,7 @@ impl Attach<'_> {
                     None => {
                         let label = workspace.main_label();
                         let tab = NewTab {
-                            label: &label,
+                            label: Some(&label),
                             dir: &workspace.dir,
                             argv: self.argv,
                             key,
@@ -398,7 +398,7 @@ impl Attach<'_> {
 
     fn open_tab(&self, session_id: &str, label: &str, workspace: &Workspace) -> Result<String> {
         let tab = NewTab {
-            label,
+            label: Some(label),
             dir: &workspace.dir,
             argv: self.argv,
             key: Some(workspace.key()),

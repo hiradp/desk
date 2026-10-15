@@ -19,10 +19,10 @@ pub struct TabRef {
 }
 
 /// A full-width tab to open in `dir`, running `argv` or, without one, whatever
-/// the backend opens by default.
+/// the backend opens by default. Without a label the backend names it.
 #[derive(Debug, Clone, Copy)]
 pub struct NewTab<'a> {
-    pub label: &'a str,
+    pub label: Option<&'a str>,
     pub dir: &'a Path,
     pub argv: Option<&'a [String]>,
     /// Stored on the tab by a backend that stores keys.
