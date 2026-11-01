@@ -28,6 +28,8 @@ use crate::backend::{Backend, CreatedSession, NewTab, SessionRef, TabRef};
 use crate::error::{AppError, Result};
 
 const CURRENT_SESSION_VARIABLE: &str = "REX_SESSION";
+/// Rex's exit status when a target is missing or ambiguous.
+const TARGET_NOT_FOUND: i32 = 3;
 /// Rex's exit status when it cannot reach the server.
 const SERVER_UNREACHABLE: i32 = 4;
 
@@ -145,6 +147,7 @@ impl<R: Runner> Rex<R> {
                 Err(AppError::Rex {
                     context: context.to_owned(),
                     message,
+                    status,
                 })
             }
         }
@@ -225,6 +228,7 @@ impl<R: Runner> Backend for Rex<R> {
             .ok_or_else(|| AppError::Rex {
                 context: context.to_owned(),
                 message: "Rex did not report the session's first window".into(),
+                status: None,
             })?;
         Ok(CreatedSession {
             session_id: created.session_id,
@@ -349,18 +353,28 @@ impl<R: Runner> Backend for Rex<R> {
         .map(drop)
     }
 
-    fn show_session(&self, session_id: &str, tab_id: &str) -> Result<()> {
+    fn show_session(&self, session_id: &str, tab_id: &str, client: Option<&str>) -> Result<()> {
         // Only the app can show a session, and none may be connected.
-        self.run(
-            "could not show the session in the Rex app",
-            vec![
-                "do".into(),
-                "session.select".into(),
-                format!("session_id={session_id}").into(),
-                format!("window_id={tab_id}").into(),
-            ],
-        )
-        .map(drop)
+        let mut arguments: Vec<OsString> = Vec::new();
+        if let Some(client) = client {
+            arguments.extend(["--client".into(), client.into()]);
+        }
+        arguments.extend([
+            "do".into(),
+            "session.select".into(),
+            format!("session_id={session_id}").into(),
+            format!("window_id={tab_id}").into(),
+        ]);
+        // Without a client, Rex picks the app only when exactly one is connected.
+        match self.run("could not show the session in the Rex app", arguments) {
+            Err(
+                error @ AppError::Rex {
+                    status: Some(TARGET_NOT_FOUND),
+                    ..
+                },
+            ) if client.is_none() => Err(AppError::AmbiguousApp(error.to_string())),
+            result => result.map(drop),
+        }
     }
 }
 
@@ -539,7 +553,7 @@ mod tests {
         let rex = rex(&[(0, ""), (1, "no client offers session.select")]);
 
         rex.focus_tab("session:9", "window:8").unwrap();
-        let shown = rex.show_session("session:9", "window:8").unwrap_err();
+        let shown = rex.show_session("session:9", "window:8", None).unwrap_err();
 
         assert_eq!(
             shown.to_string(),
@@ -552,6 +566,26 @@ mod tests {
                 "--autostart=false do session.select session_id=session:9 window_id=window:8"
             ]
         );
+    }
+
+    #[test]
+    fn shows_in_the_named_app_and_reports_an_ambiguous_app_only_when_none_is_named() {
+        let ambiguous = "client target default is ambiguous: multiple app clients are connected";
+        let rex = rex(&[(0, ""), (3, ambiguous), (3, "client mini not found")]);
+
+        rex.show_session("session:9", "window:8", Some("mini"))
+            .unwrap();
+        let unnamed = rex.show_session("session:9", "window:8", None).unwrap_err();
+        let named = rex
+            .show_session("session:9", "window:8", Some("mini"))
+            .unwrap_err();
+
+        assert_eq!(
+            calls(&rex)[0],
+            "--autostart=false --client mini do session.select session_id=session:9 window_id=window:8"
+        );
+        assert!(matches!(unnamed, AppError::AmbiguousApp(_)));
+        assert!(matches!(named, AppError::Rex { .. }));
     }
 
     #[test]

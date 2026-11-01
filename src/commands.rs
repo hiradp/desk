@@ -53,7 +53,13 @@ pub fn build(config: &Config, backend: &dyn Backend) -> Result<()> {
     Ok(())
 }
 
-pub fn open(config: &Config, backend: &dyn Backend, name: &str, prompt: &[String]) -> Result<()> {
+pub fn open(
+    config: &Config,
+    backend: &dyn Backend,
+    name: &str,
+    prompt: &[String],
+    client: Option<&str>,
+) -> Result<()> {
     let target = config
         .targets
         .iter()
@@ -100,7 +106,7 @@ pub fn open(config: &Config, backend: &dyn Backend, name: &str, prompt: &[String
                 if prompt.is_some() {
                     return Err(AppError::TabAlreadyOpen(name.to_owned()));
                 }
-                return focus(backend, &session.id, &tab.id);
+                return focus(backend, &session.id, &tab.id, client);
             }
             Some(base)
         }
@@ -124,7 +130,7 @@ pub fn open(config: &Config, backend: &dyn Backend, name: &str, prompt: &[String
             (created.session_id, created.tab_id)
         }
     };
-    focus(backend, &session_id, &tab_id)
+    focus(backend, &session_id, &tab_id, client)
 }
 
 pub fn ls(config: &Config, backend: &dyn Backend, out: &mut dyn Write) -> Result<()> {
@@ -209,11 +215,20 @@ fn running_sessions(backend: &dyn Backend) -> Result<Vec<SessionRef>> {
 }
 
 /// Makes the tab active and shows its session to the user.
-fn focus(backend: &dyn Backend, session_id: &str, tab_id: &str) -> Result<()> {
+fn focus(
+    backend: &dyn Backend,
+    session_id: &str,
+    tab_id: &str,
+    client: Option<&str>,
+) -> Result<()> {
     backend.focus_tab(session_id, tab_id)?;
     // The tab is open and active either way.
-    if let Err(error) = backend.show_session(session_id, tab_id) {
-        eprintln!("warning: {error}");
+    match backend.show_session(session_id, tab_id, client) {
+        Ok(()) => {}
+        Err(error @ AppError::AmbiguousApp(_)) => {
+            eprintln!("warning: {error}\nhint: choose one with `desk open --client APP TARGET`");
+        }
+        Err(error) => eprintln!("warning: {error}"),
     }
     Ok(())
 }
@@ -383,7 +398,7 @@ mod tests {
         config.targets.retain(|target| target.command.is_none());
         let fake = Fake::default();
 
-        open(&config, &fake, "app", &[]).unwrap();
+        open(&config, &fake, "app", &[], None).unwrap();
 
         assert_eq!(fake.argv("• app"), None);
     }
@@ -420,7 +435,9 @@ mod tests {
         let fake = Fake::default();
 
         let built = build(&config, &fake).unwrap_err().to_string();
-        let opened = open(&config, &fake, "app", &[]).unwrap_err().to_string();
+        let opened = open(&config, &fake, "app", &[], None)
+            .unwrap_err()
+            .to_string();
 
         assert!(built.contains(gone.to_str().unwrap()), "{built}");
         assert!(opened.contains(gone.to_str().unwrap()), "{opened}");
@@ -433,9 +450,9 @@ mod tests {
         let config = config(dir.path());
         let fake = Fake::default();
 
-        open(&config, &fake, "app", &[]).unwrap();
-        open(&config, &fake, "app", &[]).unwrap();
-        open(&config, &fake, "notes", &[]).unwrap();
+        open(&config, &fake, "app", &[], None).unwrap();
+        open(&config, &fake, "app", &[], None).unwrap();
+        open(&config, &fake, "notes", &[], None).unwrap();
 
         assert_eq!(fake.layout(), layout(&[(MAIN, &["• app", "• notes"])]));
         assert_eq!(fake.focused(), ["• app", "• app", "• notes"]);
@@ -448,8 +465,8 @@ mod tests {
         let fake = Fake::default();
         fake.seed(WORK, &["• agent 1", "• agent 3", "• agent x", "• agent 0"]);
 
-        open(&config, &fake, "agent", &[]).unwrap();
-        open(&config, &fake, "agent", &[]).unwrap();
+        open(&config, &fake, "agent", &[], None).unwrap();
+        open(&config, &fake, "agent", &[], None).unwrap();
 
         assert_eq!(fake.focused(), ["• agent 2", "• agent 4"]);
     }
@@ -461,8 +478,8 @@ mod tests {
         config.targets[4].icon = None;
         let fake = Fake::default();
 
-        open(&config, &fake, "agent", &[]).unwrap();
-        open(&config, &fake, "agent", &[]).unwrap();
+        open(&config, &fake, "agent", &[], None).unwrap();
+        open(&config, &fake, "agent", &[], None).unwrap();
 
         assert_eq!(
             fake.layout(),
@@ -482,9 +499,10 @@ mod tests {
             &fake,
             "agent",
             &words(&["why", "it's", "--slow\\"]),
+            None,
         )
         .unwrap();
-        open(&config, &fake, "agent", &[]).unwrap();
+        open(&config, &fake, "agent", &[], None).unwrap();
 
         assert_eq!(
             fake.argv("• agent 1"),
@@ -501,7 +519,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = config(dir.path());
         let fake = Fake::default();
-        open(&config, &fake, "chat", &[]).unwrap();
+        open(&config, &fake, "chat", &[], None).unwrap();
         let cases = [
             ("nope", vec![], "unknown target `nope`"),
             ("app", words(&["hi"]), "it has no `command`"),
@@ -510,7 +528,9 @@ mod tests {
         ];
 
         for (name, prompt, expected) in cases {
-            let message = open(&config, &fake, name, &prompt).unwrap_err().to_string();
+            let message = open(&config, &fake, name, &prompt, None)
+                .unwrap_err()
+                .to_string();
             assert!(message.contains(expected), "{message}");
         }
 
@@ -589,7 +609,7 @@ mod tests {
             Err(AppError::BackendUnavailable(_))
         ));
         assert!(matches!(
-            open(&config, &fake, "app", &[]),
+            open(&config, &fake, "app", &[], None),
             Err(AppError::BackendUnavailable(_))
         ));
     }

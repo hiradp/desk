@@ -82,7 +82,8 @@ pub trait Backend {
     /// Makes the tab the active one in its session.
     fn focus_tab(&self, session_id: &str, tab_id: &str) -> Result<()>;
 
-    /// Shows the session to the user, on the given tab. Fails when the backend
-    /// cannot change what the user sees; the tab is open either way.
-    fn show_session(&self, session_id: &str, tab_id: &str) -> Result<()>;
+    /// Shows the session to the user, on the given tab, in the given app or
+    /// the only one connected. Fails when the backend cannot change what the
+    /// user sees; the tab is open either way.
+    fn show_session(&self, session_id: &str, tab_id: &str, client: Option<&str>) -> Result<()>;
 }

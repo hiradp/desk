@@ -257,7 +257,7 @@ pub fn attach(config: &Config, backend: &dyn Backend, plan: &Plan) -> Result<Rep
     let mut warnings = Vec::new();
     backend.focus_tab(&root.session_id, &root.tab.id)?;
     // The workspace is open either way.
-    if let Err(error) = backend.show_session(&root.session_id, &root.tab.id) {
+    if let Err(error) = backend.show_session(&root.session_id, &root.tab.id, None) {
         warnings.push(format!(
             "workspace {:?} is open in session {}, but it could not be shown: {error}",
             root.name, root.session_id

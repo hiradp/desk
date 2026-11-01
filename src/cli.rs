@@ -34,6 +34,11 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct OpenArgs {
+    /// Rex app to show the session in, as a label or ID; needed only when
+    /// several apps are connected
+    #[arg(long, value_name = "APP")]
+    pub client: Option<String>,
+
     /// Target name
     #[arg(add = ArgValueCompleter::new(completion::targets))]
     pub target: String,
@@ -91,6 +96,28 @@ mod tests {
         };
         assert_eq!(args.target, "notes");
         assert_eq!(args.prompt, ["why", "--is", "-it", "slow"]);
+    }
+
+    #[test]
+    fn open_takes_a_client_until_the_prompt_starts() {
+        for argv in [
+            &["open", "--client", "mini", "notes", "why"][..],
+            &["open", "notes", "--client", "mini", "why"][..],
+        ] {
+            let Some(Command::Open(args)) = parse(argv).command else {
+                panic!("expected Open");
+            };
+            assert_eq!(args.client.as_deref(), Some("mini"));
+            assert_eq!(args.prompt, ["why"]);
+        }
+
+        let Some(Command::Open(args)) =
+            parse(&["open", "notes", "why", "--client", "mini"]).command
+        else {
+            panic!("expected Open");
+        };
+        assert_eq!(args.client, None);
+        assert_eq!(args.prompt, ["why", "--client", "mini"]);
     }
 
     #[test]

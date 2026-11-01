@@ -44,6 +44,11 @@ investigate  🔎 investigate
 
 `desk open` takes you to the tab. Plain `desk` leaves your view where it is.
 
+When several Rex apps are connected, name the one to switch with
+`--client`, as a label or ID from `rex client ls`. It goes before the
+prompt: `desk open app --client mini`. Without it, the tab still opens and
+desk warns that it could not choose an app.
+
 ## Configure
 
 `~/.config/desk/config.toml`, or the file named by `DESK_CONFIG`.

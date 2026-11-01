@@ -44,7 +44,13 @@ fn run(cli: &Cli) -> Result<()> {
     };
     match &cli.command {
         None => commands::build(&config, &backend),
-        Some(Command::Open(args)) => commands::open(&config, &backend, &args.target, &args.prompt),
+        Some(Command::Open(args)) => commands::open(
+            &config,
+            &backend,
+            &args.target,
+            &args.prompt,
+            args.client.as_deref(),
+        ),
         Some(Command::Ls) => commands::ls(&config, &backend, &mut std::io::stdout().lock()),
         Some(Command::Stop(args)) => commands::stop(&config, &backend, args.session.as_deref()),
         Some(Command::Attach(args)) => {

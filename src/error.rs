@@ -68,7 +68,14 @@ pub enum AppError {
     StartRex(#[source] std::io::Error),
 
     #[error("{context}: {message}")]
-    Rex { context: String, message: String },
+    Rex {
+        context: String,
+        message: String,
+        status: Option<i32>,
+    },
+
+    #[error("{0}")]
+    AmbiguousApp(String),
 
     #[error("{context}: could not parse Rex response: {source}")]
     ParseRex {
@@ -101,6 +108,7 @@ impl AppError {
             | Self::BackendUnavailable(_)
             | Self::StartRex(_)
             | Self::Rex { .. }
+            | Self::AmbiguousApp(_)
             | Self::ParseRex { .. }
             | Self::WriteOutput(_) => 1,
         }

@@ -273,7 +273,7 @@ impl Backend for Fake {
         Ok(())
     }
 
-    fn show_session(&self, session_id: &str, _tab_id: &str) -> Result<()> {
+    fn show_session(&self, session_id: &str, _tab_id: &str, _client: Option<&str>) -> Result<()> {
         let mut state = self.state.borrow_mut();
         if state.headless {
             return Err(AppError::BackendUnavailable("no app is connected".into()));
